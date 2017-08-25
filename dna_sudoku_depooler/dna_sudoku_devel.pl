@@ -15,7 +15,7 @@ our $config_file; # = "test.txt";                                               
 our $gatk_location = catdir(catdir(dirname(__FILE__), "opt"), "GenomeAnalysisTK.jar"); 
 our $bt2script_location = catdir(catdir(dirname(__FILE__), "opt"), "bt2alignment.sh");
 our $depooler_location = catdir(catdir(dirname(__FILE__), "opt"), "SudokuDePooler-0.1.1-SNAPSHOT-jar-with-dependencies.jar"); 
-our ($work_folder, $prefix) = ('.', '');
+our ($output_folder, $prefix) = ('run', 'run');
 our ($scheme, $fq_file, $dmp_folder, $algn_folder, $bam_file, $snp_folder, $vcf_file, $depool_folder);
 our ($demult_seq, @trim5_seq, @trim3_seq);
 our ($bt2index, $reference, $regions);
@@ -37,7 +37,7 @@ sub parse_options {
         'bam=s' => \$bam_file,
         'vcf=s' => \$vcf_file,
         'prefix=s' => \$prefix,
-        'wf=s' => \$work_folder,
+        'output=s' => \$output_folder,
         'demult=s' => \$demult_seq,
         'trseq5=s' => \@trim5_seq,
         'trseq3=s' => \@trim3_seq,
@@ -59,8 +59,9 @@ sub parse_options {
 
 #---LAUNCH---
 &parse_options(@ARGV);
-&print_help()                           if ($help);
-&parse_options(&read_config_file())     if ($config_file);
+&print_help()   if ($help);
+&parse_options(&read_config_file()) and &parse_options(@ARGV)   if ($config_file);
+&create_output_folder();
 
 if      ($vcf_file)     {&do_depooling();}
 elsif   ($bam_file)     {&do_snpcalling();}
@@ -216,11 +217,21 @@ sub get_pools_list {
     }
 }
 
+sub create_output_folder {
+    my $folder = canonpath($output_folder);
+    my $index = 0;
+    while(-d $folder) {
+        $folder = canonpath($output_folder) . '_' . ++$index;
+    }
+    die "Cannot create folder $folder"  if not make_path ($folder);
+    $output_folder = $folder;
+}
+    
 sub create_folder {
     use File::Path qw(make_path);
     use File::Spec::Functions;
     
-    my $folder = catdir(canonpath($work_folder), $prefix ? "$prefix\_$_[0]" : $_[0]);
+    my $folder = catdir(canonpath($output_folder), $prefix ? "$prefix\_$_[0]" : $_[0]);
     if (not -d $folder) {
         my $s = make_path ($folder);
         die "Cannot create folder $folder"  if not $s;
