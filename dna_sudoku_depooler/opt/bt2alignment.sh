@@ -12,7 +12,7 @@ if [ -f $report ]; then rm -f $report; fi
 bowtie2-align-s -x $2 -U $3 --rg-id SM --rg 'SM:'$4 --threads $5 -S $sam 2>> $report 
 
 samtools view -bS $sam > $uns_bam
-samtools 'sort' $uns_bam $prefix
+samtools 'sort' $uns_bam -o $bam
 samtools index $bam
 
 rm $sam $uns_bam
