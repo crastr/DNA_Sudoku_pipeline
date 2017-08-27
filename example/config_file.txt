@@ -1,5 +1,5 @@
 n		2
-wf		example-result
+output		example-result
 prefix		exmp
 
 fq		example/datasource/rawreads.fq
