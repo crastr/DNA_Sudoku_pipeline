@@ -12,4 +12,4 @@ reference	example/datasource/reference/ACTA2_full_DNA.fasta
 regions		example/datasource/regions.bed
 
 org_ploidy	2
-pool_size	13
+

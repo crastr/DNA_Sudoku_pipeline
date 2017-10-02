@@ -5,6 +5,8 @@ use warnings;
 
 use File::Basename;
 use File::Spec;
+use File::Spec::Functions;
+use File::Path qw(make_path);
 
 #---OPTIONS---
 our $path_sep = File::Spec->catfile('', '');
@@ -15,8 +17,8 @@ our $config_file; # = "test.txt";                                               
 our $gatk_location = catfile(catdir(dirname(__FILE__), "opt"), "GenomeAnalysisTK.jar"); 
 our $bt2script_location = catfile(catdir(dirname(__FILE__), "opt"), "bt2alignment.sh");
 our $depooler_location = catfile(catdir(dirname(__FILE__), "opt"), "SudokuDePooler-0.1.1-SNAPSHOT-jar-with-dependencies.jar"); 
-our ($output_folder, $prefix, $opt_file) = ('run', 'run');
-our ($scheme, $fq_file, $dmp_folder, $algn_folder, $bam_file, $snp_folder, $vcf_file, $depool_folder);
+our ($output_folder, $prefix, $opt_file) = ('run');
+our ($scheme, $fq_file, $dmp_folder, $algn_folder, $snp_folder, $vcf_file, $depool_folder);
 our ($demult_seq, @trim5_seq, @trim3_seq);
 our ($bt2index, $reference, $regions);
 our ($trimert, $trimqual, $trimlen) = (0.2, 25, 40);
@@ -33,7 +35,7 @@ our %OPT = (
     SCHEME          => 'scheme',
     DEMULT_FOLDER   => 'dmpf',
     FQ_FILE         => 'fq',
-    BAM_FILE        => 'bam',
+    ALGN_FOLDER     => 'bam',
     VCF_FILE        => 'vcf',
     PREFIX          => 'prefix',
     OUTPUT          => 'output',
@@ -63,7 +65,7 @@ $prefix = $prefix ? "${prefix}\_" : '';
 &define_output_options_file_name();
 
 if      ($vcf_file)     {&do_depooling();}
-elsif   ($bam_file)     {&do_snpcalling();}
+elsif   ($algn_folder)  {&do_snpcalling();}
 elsif   ($dmp_folder)   {&do_mapping();}
 else                    {&create_demultiplexing_folder(); &do_demultiplexing();}
 
@@ -113,7 +115,6 @@ sub do_reads_trimming {
     }
 
     &write_demultiplexing_options();
-    &create_alignment_folder();
     &do_mapping();
 }
 
@@ -121,6 +122,7 @@ sub do_mapping {
     die "No demultiplexing sequences file"  if not defined($demult_seq) or not -e $demult_seq;
     die "No bowtie2 index"                  if not defined($bt2index) or not -e "${bt2index}.1.bt2";
     
+    &create_alignment_folder();
     say "***Reads Mapping***";
 
     foreach my $poolId (keys %pools_hash) {
@@ -128,12 +130,11 @@ sub do_mapping {
         my $tr_fq = &define_trimmed_fastq_file_name($poolId);
         my $bam_file = &define_bam_file_name($poolId);
         die "No fastq-file for the pool ${tr_fq}. Expected ${tr_fq}." if not -e $tr_fq;
-        my $exit_code = system "${bt2script_location} ${poolbam} ${bt2index} ${tr_fq} ${poolId} ${threads_number}";
+        my $exit_code = system "${bt2script_location} ${bam_file} ${bt2index} ${tr_fq} ${poolId} ${threads_number}";
         die if $exit_code;
     }
 
     &write_mapping_options();
-    &create_snp_calling_folder();
     &do_snpcalling();
 }
 
@@ -141,37 +142,54 @@ sub do_snpcalling {
     die "No reference"          if not defined($reference)  or not -e "$reference";
     die "No regions"            if not defined($regions)    or not -e "$regions";
     
+    &create_snp_calling_folder();
     say "***SNP-calling***";
+
     foreach my $poolId (keys %pools_hash) {
         say $poolId;
-        my $poolSize = $pools_hash{$poolId}};
+        my $poolSize = $pools_hash{$poolId};
         my $poolPloidy = $organism_ploidy * $poolSize;
         my $bam_file = &define_bam_file_name($poolId);
         die "No bam-file for the pool ${poolId}. Expected ${bam_file}." if not -e $bam_file;
-        my $vcf_file = &define_vcf_file_name($poolId);
+        my $pool_vcf_file = &define_pool_vcf_file_name($poolId);
         my $snp_calling_report = &define_snp_calling_report_file_name($poolId);
         
         my $command = "java -jar ${gatk_location} -T HaplotypeCaller -gt_mode DISCOVERY "
             . "-R ${reference} -L ${regions} -I ${bam_file} --sample_ploidy ${poolPloidy} "
-            . "-o ${vcf_file} -nct ${threads_number} 2> ${snp_calling_report}";
+            . "-o ${pool_vcf_file} -nct ${threads_number} 2> ${snp_calling_report}";
         my $exit_code = system $command;
         die if $exit_code;
     }
     
     &write_snpcalling_options();
-#    &do_depooling();
+    &merge_vcfs();
+}
+
+sub merge_vcfs {
+    $vcf_file = &define_merged_vcf_file_name();
+    my $vcfs_merging_report_file = &define_vcfs_merging_report_file_name();
+    my $command = "java -jar ${gatk_location} -T CombineVariants -R ${reference} ";
+    foreach my $poolId (keys %pools_hash) {
+	my $vcf_file = &define_pool_vcf_file_name($poolId);
+	$command .= " --variant ${vcf_file}";
+    }
+    $command .= " -o ${vcf_file} 2> ${vcfs_merging_report_file}";
+    my $exit_code = system $command;
+
+    &do_depooling() if not $exit_code;
 }
 
 sub do_depooling {
-    die "No pooling scheme"     if not defined($scheme) or not -e $scheme;
     die "No vcf file"           if not defined($vcf_file) or not -e $vcf_file;
+
     $depool_folder = &create_folder("depooling");
-    
     say "***De-pooling***";
+
+    my $output_file = define_depooling_output_file_name();
     my $command = "java -jar $depooler_location -sch $scheme -vcf $vcf_file ";
-    $command .= $monitor
-        ? "-m" 
-        : "> " . catfile($depool_folder, ($prefix ? "${prefix}_" : '') . 'depooling.txt'); 
+#    $command .= 
+    $command .= $monitor ? "-m" : ("> " . $output_file);
+ 
     my $exit_code = system $command;
 
     &write_depooling_options() and say "Finished successfully" if not $exit_code;
@@ -189,7 +207,7 @@ sub parse_options {
         "$OPT{SCHEME}=s"            => \$scheme,
         "$OPT{FQ_FILE}=s"           => \$fq_file,
         "$OPT{DEMULT_FOLDER}=s"     => \$dmp_folder,
-        "$OPT{BAM_FILE}=s"          => \$bam_file,
+        "$OPT{ALGN_FOLDER}=s"       => \$algn_folder,
         "$OPT{VCF_FILE}=s"          => \$vcf_file,
         "$OPT{PREFIX}=s"            => \$prefix,
         "$OPT{OUTPUT}=s"            => \$output_folder,
@@ -203,7 +221,6 @@ sub parse_options {
         "$OPT{REFERENCE}=s"         => \$reference, 
         "$OPT{REGIONS}=s"           => \$regions,
         "$OPT{ORGANISM_PLOIDY}=i"   => \$organism_ploidy,
-        "$OPT{POOL_SIZE}=i"         => \$poolsize,
         "$OPT{GRAFIC_MONITOR}"      => \$monitor,
     );
     die "Unknown option"  if (not $opt_parsing);
@@ -232,11 +249,10 @@ sub write_mapping_options {
 
 sub write_snpcalling_options {
     open(OPTF, ">>", $opt_file) or die "Cannot write options file .";
-    printf OPTF "-%s\t%s\n",    $OPT{BAM_FILE},         $bam_file;
+    printf OPTF "-%s\t%s\n",    $OPT{ALGN_FOLDER},      $algn_folder;
     printf OPTF "-%s\t%s\n",    $OPT{REFERENCE},        $reference;
     printf OPTF "-%s\t%s\n",    $OPT{REGIONS},          $regions;
     printf OPTF "-%s\t%s\n",    $OPT{ORGANISM_PLOIDY},  $organism_ploidy;
-    printf OPTF "-%s\t%s\n",    $OPT{POOL_SIZE},        $poolsize;
     printf OPTF "-%s\t%s\n",    $OPT{GATK},             $gatk_location;
     close OPTF;
 }
@@ -306,32 +322,30 @@ sub create_output_folder {
 }
     
 sub create_folder {
-    use File::Path qw(make_path);
-    use File::Spec::Functions;
-    
-    my $folder = catdir(canonpath($output_folder), $prefix ? "$prefix\_$_[0]" : $_[0]);
+    my $name = $_[0];
+    my $folder = catdir(canonpath($output_folder), $prefix . $name);
     if (not -d $folder) {
         my $s = make_path ($folder);
         die "Cannot create folder $folder"  if not $s;
     } else {
-#        my $st = (stat($folder))[2] & 060;                                      #debug
-#        say $st;                                                                #debug
         die "Cannot write to $dmp_folder"   if ((stat($folder))[2] & 060) != 48; 
     }
     $folder;
 }
 
 sub define_output_options_file_name {
-    $opt_file = catfile($output_folder, ($prefix ? "$prefix\_" : '') . "opt.txt");
+    $opt_file = catfile($output_folder, $prefix . "opt.txt");
 }
 sub create_demultiplexing_folder {
     $dmp_folder = &create_folder("dmp-reads");
 }
 sub define_raw_fastq_file_name {
-    catfile($dmp_folder, $_ . '.fq');
+    my $poolId = $_[0];
+    catfile($dmp_folder, $poolId . '.fq');
 }
 sub define_trimmed_fastq_file_name {
-    catfile($dmp_folder, $_ . '_tr.fq');
+    my $poolId = $_[0];
+    catfile($dmp_folder, $poolId . '_tr.fq');
 }
 sub define_trimming_report_file_name {
     my $poolId = $_[0];
@@ -347,17 +361,26 @@ sub create_alignment_folder {
 }
 sub define_bam_file_name {
     my $poolId = $_[0];
-    catfile($algn_folder, ($prefix ? "${prefix}_" : '') . $_);
+    catfile($algn_folder, ${prefix} . $poolId . '.bam');
 }
 sub create_snp_calling_folder {
     $snp_folder = &create_folder("snp-calling");
 }
-sub define_vcf_file_name {
+sub define_pool_vcf_file_name {
     my $poolId = $_[0];
-    catfile($snp_folder, ($prefix ? "${prefix}_" : '') . 'snp.vcf');
+    catfile($snp_folder, $prefix . $poolId .'_snp.vcf');
 }
 sub define_snp_calling_report_file_name {
     my $poolId = $_[0];
-    catfile($snp_folder, ($prefix ? "${prefix}_" : '') . 'report.txt');
+    catfile($snp_folder, $prefix . $poolId . '_snp-calling_report.txt');
+}
+sub define_merged_vcf_file_name {
+    catfile($snp_folder, $prefix . 'snp.vcf');
+}
+sub define_vcfs_merging_report_file_name {
+    catfile($snp_folder, $prefix . 'merging_report.txt');
+}
+sub define_depooling_output_file_name {
+    catfile($depool_folder, $prefix . 'depooling.txt');
 }
 

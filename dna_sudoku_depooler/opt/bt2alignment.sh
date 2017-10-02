@@ -1,9 +1,8 @@
 #!/bin/sh
-prefix=$1
-sam=$prefix'.sam'
-report=$prefix'_report.txt'
-uns_bam=$prefix'_unsorted.bam'
-bam=$prefix'.bam'
+bam=$1
+sam=$bam'.sam'
+report=$bam'_report.txt'
+uns_bam=$bam'_unsorted.bam'
 
 if [ -f $bam ]; then rm -f $bam; fi
 if [ -f $bam.bai ]; then rm -f $bam.bai; fi
