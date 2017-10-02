@@ -20,7 +20,8 @@ our ($scheme, $fq_file, $dmp_folder, $algn_folder, $bam_file, $snp_folder, $vcf_
 our ($demult_seq, @trim5_seq, @trim3_seq);
 our ($bt2index, $reference, $regions);
 our ($trimert, $trimqual, $trimlen) = (0.2, 25, 40);
-our ($organism_ploidy, $poolsize);
+our ($organism_ploidy) =(2);
+our %pools_hash;
 our $monitor;
 
 our %OPT = (
@@ -46,64 +47,64 @@ our %OPT = (
     REFERENCE       => 'reference',
     REGIONS         => 'regions',
     ORGANISM_PLOIDY => 'org_ploidy',
-    POOL_SIZE       => 'pool_size',
     GRAFIC_MONITOR  => 'gm',
     );
 
 #---LAUNCH---
 &parse_options(@ARGV);
-&print_help()   if ($help);
-&parse_options(&read_config_file()) and &parse_options(@ARGV)   if ($config_file);
+(&print_help() and die)                                         if ($help);
+(&parse_options(&read_config_file()) and &parse_options(@ARGV)) if ($config_file);
+
+die "No pooling scheme."    if (not defined($scheme) or not -e $scheme);
+%pools_hash = &get_pools_sample_hash();
+$prefix = $prefix ? "${prefix}\_" : '';
+
 &create_output_folder();
-$opt_file = catfile($output_folder, ($prefix ? "$prefix\_" : '') . "opt.txt");
+&define_output_options_file_name();
 
 if      ($vcf_file)     {&do_depooling();}
 elsif   ($bam_file)     {&do_snpcalling();}
 elsif   ($dmp_folder)   {&do_mapping();}
-else                    {&do_demultiplexing();}
+else                    {&create_demultiplexing_folder(); &do_demultiplexing();}
 
 #---PROCEDURES---
 sub do_demultiplexing {
-    die "No fasta source file"              if not defined($fq_file) or not -e $fq_file;
+    die "No fastq source file"              if not defined($fq_file) or not -e $fq_file;
     die "No demultiplexing sequences file"  if not defined($demult_seq) or not -e $demult_seq;
-    $dmp_folder = &create_folder("dmp-reads");
     
     say "***Demultiplexing***";
     
     my $exit_code = system "cutadapt -g file:$demult_seq -o ${dmp_folder}${path_sep}\{name}.fq $fq_file \\
-    >> $dmp_folder$path_sep\\dmp-report.txt";
+    >> ${dmp_folder}${path_sep}\\dmp-report.txt";
     
     &do_reads_trimming() if not $exit_code;
 }
 
 sub do_reads_trimming {
-    my @pools_list = &get_pools_list();
-
     say "***Reads Trimming***";
 
-    foreach (@pools_list) {
-        my $poolId = $_;
-        my $raw_fq = catfile($dmp_folder, $_ . '.fq');
-        die "No file with reads $raw_fq"    if not -e $raw_fq;
-        my $tr_fq = catfile($dmp_folder, $_ . '_tr.fq');
+    foreach my $poolId (keys %pools_hash) {
+        my $raw_fq = &define_raw_fastq_file_name($poolId);
+        my $tr_fq = &define_trimmed_fastq_file_name($poolId);
+        die "No fastq-file for the pool ${raw_fq}. Expected ${raw_fq}."    if not -e $raw_fq;
         
         my $command;
         foreach (@trim5_seq) {
             my $source = $command ? '-' : $raw_fq;
             my $part = fileparse($_, qr/\.[^.]*/);
-            my $report_file = catfile($dmp_folder, $poolId . '_' . $part .'_tr-rep.txt');
-            $command .= "cutadapt -g file:$_ -e $trimert --discard-untrimmed $source 2> $report_file | ";
+            my $report_file = &define_trimming_report_file_name($poolId, $part);
+            $command .= "cutadapt -g file:$_ -e ${trimert} --discard-untrimmed ${source} 2> ${report_file} | ";
         }
         foreach (@trim3_seq) {
             my $source = $command ? '-' : $raw_fq;
             my $part = fileparse($_, qr/\.[^.]*/);
-            my $report_file = catfile($dmp_folder, $poolId . '_' . $part .'_tr-rep.txt');
-            $command .= "cutadapt -a file:$_ -e $trimert --discard-untrimmed $source 2> $report_file | ";
+            my $report_file = &define_trimming_report_file_name($poolId, $part);
+            $command .= "cutadapt -a file:$_ -e ${trimert} --discard-untrimmed ${source} 2> ${report_file} | ";
         }
         {
             my $source = $command ? '-' : $raw_fq;
-            my $report_file = catfile($dmp_folder, $poolId . '_filt-rep.txt');
-            $command .= "cutadapt -q $trimqual,$trimqual -m $trimlen -o $tr_fq $source > $report_file";
+            my $report_file = &define_length_trimming_report_file_name($poolId);
+            $command .= "cutadapt -q ${trimqual},${trimqual} -m ${trimlen} -o ${tr_fq} ${source} > ${report_file}";
         }
         
         say $poolId;
@@ -111,54 +112,54 @@ sub do_reads_trimming {
         die if $exit_code;
     }
 
-    &write_demultiplexing_options() and &do_mapping();
+    &write_demultiplexing_options();
+    &create_alignment_folder();
+    &do_mapping();
 }
 
 sub do_mapping {
     die "No demultiplexing sequences file"  if not defined($demult_seq) or not -e $demult_seq;
-    die "No bowtie2 index"                  if not defined($bt2index) or not -e "$bt2index.1.bt2";
-    my @pools_list = &get_pools_list();
-    $algn_folder = &create_folder("alignments");
-    $bam_file = catfile($algn_folder, ($prefix ? "${prefix}_" : '') . 'merged.bam');
-    my $merged_command = "samtools merge -f $bam_file ";
-
+    die "No bowtie2 index"                  if not defined($bt2index) or not -e "${bt2index}.1.bt2";
+    
     say "***Reads Mapping***";
 
-    foreach (@pools_list) {
-        my $tr_fq = catfile($dmp_folder, $_ . '_tr.fq');
-        my $poolbam = catfile($algn_folder, ($prefix ? "${prefix}_" : '') . $_);
-        say $_;
-        my $exit_code = system "$bt2script_location $poolbam $bt2index $tr_fq $_ $threads_number";
+    foreach my $poolId (keys %pools_hash) {
+        say $poolId;
+        my $tr_fq = &define_trimmed_fastq_file_name($poolId);
+        my $bam_file = &define_bam_file_name($poolId);
+        die "No fastq-file for the pool ${tr_fq}. Expected ${tr_fq}." if not -e $tr_fq;
+        my $exit_code = system "${bt2script_location} ${poolbam} ${bt2index} ${tr_fq} ${poolId} ${threads_number}";
         die if $exit_code;
-        $merged_command .= "${poolbam}.bam ";
     }
 
-    say "***Alignments Merging***";
-
-    my $exit_code = system $merged_command;
-    die if $exit_code;
-    $exit_code = system "samtools index $bam_file";
-
-    &write_mapping_options() and &do_snpcalling() if not $exit_code;
+    &write_mapping_options();
+    &create_snp_calling_folder();
+    &do_snpcalling();
 }
 
 sub do_snpcalling {
-    die "No reference"          if not defined($reference) or not -e "$reference";
-    die "No regions"            if not defined($regions) or not -e "$regions";
-    die "No organism ploidy"    if not defined($organism_ploidy);
-    die "No pool size"          if not defined($poolsize);
-    $snp_folder = &create_folder("snp");
-    $vcf_file = catfile($snp_folder, ($prefix ? "${prefix}_" : '') . 'snp.vcf');
-    my $snp_calling_report = catfile($snp_folder, ($prefix ? "${prefix}_" : '') . 'report.txt');
-
+    die "No reference"          if not defined($reference)  or not -e "$reference";
+    die "No regions"            if not defined($regions)    or not -e "$regions";
+    
     say "***SNP-calling***";
-    my $poolploidy = $organism_ploidy * $poolsize;
-    my $command = "java -jar $gatk_location -T HaplotypeCaller -gt_mode DISCOVERY "
-    . "-R $reference --activeRegionIn $regions -I $bam_file --sample_ploidy $poolploidy "
-    . "-o $vcf_file -nct $threads_number 2> $snp_calling_report";
-    my $exit_code = system $command;
-
-    &write_snpcalling_options() and &do_depooling() if not $exit_code;
+    foreach my $poolId (keys %pools_hash) {
+        say $poolId;
+        my $poolSize = $pools_hash{$poolId}};
+        my $poolPloidy = $organism_ploidy * $poolSize;
+        my $bam_file = &define_bam_file_name($poolId);
+        die "No bam-file for the pool ${poolId}. Expected ${bam_file}." if not -e $bam_file;
+        my $vcf_file = &define_vcf_file_name($poolId);
+        my $snp_calling_report = &define_snp_calling_report_file_name($poolId);
+        
+        my $command = "java -jar ${gatk_location} -T HaplotypeCaller -gt_mode DISCOVERY "
+            . "-R ${reference} -L ${regions} -I ${bam_file} --sample_ploidy ${poolPloidy} "
+            . "-o ${vcf_file} -nct ${threads_number} 2> ${snp_calling_report}";
+        my $exit_code = system $command;
+        die if $exit_code;
+    }
+    
+    &write_snpcalling_options();
+#    &do_depooling();
 }
 
 sub do_depooling {
@@ -274,28 +275,33 @@ sub read_config_file {
     };
 }
 
-sub get_pools_list {
-    my @pools_list;
-    if (open FILE, "<", $demult_seq) {
+sub get_pools_sample_hash {
+    my %pools_hash = ();
+    if (open FILE, "<", $scheme) {
         while (<FILE>) {
-            if (s/^>//) {
-                push @pools_list, ((split(/\s+/, $_))[0]);
+            if (! s/^\s+//) {
+                my @ar = (split(/\s+/, $_));
+                my $count = 0;
+                for(my $i = 1; $i <= $#ar; $i++) {
+                    ++$count if $ar[$i] != 0;
+                }
+                $pools_hash{$ar[0]} = $count;
             }
         }
-        close FILE;
-        @pools_list;
+        %pools_hash;
     } else {
-        die "Cannot read pool identificator file .";
+        die "Cannot read scheme file.";
     }
 }
 
+#---NAMES---
 sub create_output_folder {
     my $folder = canonpath($output_folder);
     my $index = 0;
     while(-d $folder) {
         $folder = canonpath($output_folder) . '_' . ++$index;
     }
-    die "Cannot create folder $folder"  if not make_path ($folder);
+    die "Cannot create output folder $folder"  if not make_path ($folder);
     $output_folder = $folder;
 }
     
@@ -314,3 +320,44 @@ sub create_folder {
     }
     $folder;
 }
+
+sub define_output_options_file_name {
+    $opt_file = catfile($output_folder, ($prefix ? "$prefix\_" : '') . "opt.txt");
+}
+sub create_demultiplexing_folder {
+    $dmp_folder = &create_folder("dmp-reads");
+}
+sub define_raw_fastq_file_name {
+    catfile($dmp_folder, $_ . '.fq');
+}
+sub define_trimmed_fastq_file_name {
+    catfile($dmp_folder, $_ . '_tr.fq');
+}
+sub define_trimming_report_file_name {
+    my $poolId = $_[0];
+    my $part = $_[1];
+    catfile($dmp_folder, $poolId . '_' . $part .'_tr-rep.txt');
+}
+sub define_length_trimming_report_file_name {
+    my $poolId = $_[0];
+    catfile($dmp_folder, $poolId . '_filt-rep.txt');
+}
+sub create_alignment_folder {
+    $algn_folder = &create_folder("alignments");
+}
+sub define_bam_file_name {
+    my $poolId = $_[0];
+    catfile($algn_folder, ($prefix ? "${prefix}_" : '') . $_);
+}
+sub create_snp_calling_folder {
+    $snp_folder = &create_folder("snp-calling");
+}
+sub define_vcf_file_name {
+    my $poolId = $_[0];
+    catfile($snp_folder, ($prefix ? "${prefix}_" : '') . 'snp.vcf');
+}
+sub define_snp_calling_report_file_name {
+    my $poolId = $_[0];
+    catfile($snp_folder, ($prefix ? "${prefix}_" : '') . 'report.txt');
+}
+
