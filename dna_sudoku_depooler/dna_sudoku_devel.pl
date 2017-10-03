@@ -17,13 +17,15 @@ our $threads_number = 2;
 our $config_file; # = "test.txt";                                               #debugging
 our $gatk_location = catfile(catdir(dirname(__FILE__), "opt"), "GenomeAnalysisTK.jar"); 
 our $bt2script_location = catfile(catdir(dirname(__FILE__), "opt"), "bt2alignment.sh");
-our $depooler_location = catfile(catdir(dirname(__FILE__), "opt"), "SudokuDePooler-0.1.1-SNAPSHOT-jar-with-dependencies.jar"); 
+our $depooler_location = catfile(catdir(dirname(__FILE__), "opt"), "s-DePooler-0.2.2.jar"); 
 our ($output_folder, $prefix, $opt_file) = ('run');
 our ($scheme, $fq_file, $dmp_folder, $algn_folder, $bam_file, $snp_folder, $vcf_file);
 our ($demult_seq, @trim5_seq, @trim3_seq);
 our ($bt2index, $reference, $regions);
 our ($trimert, $trimqual, $trimlen) = (0.2, 25, 40);
 our ($organism_ploidy) =(2);
+our ($time_limit, $comb_limit, $tries, $success, $noIndels) = (2000);
+our ($seqerr, $confidence, $mixing_precision);
 our %pools_hash;
 our $monitor;
 
@@ -51,6 +53,14 @@ our %OPT = (
     REGIONS         => 'regions',
     ORGANISM_PLOIDY => 'org_ploidy',
     GRAFIC_MONITOR  => 'gm',
+    TIME_LIMIT      => 'time_limit',
+    COMBIN_LIMIT    => 'cmb_limit',
+    TRIES           => 'tries',
+    SUCCESS         => 'success',
+    NO_INDELS       => 'noIndels',
+    SEQERR          => 'seqerr',
+    CONFIDENCE      => 'conf',
+    MIX_PREC        => 'mp',
     );
 
 #---LAUNCH---
@@ -192,8 +202,16 @@ sub do_depooling {
 
     my $output_file = define_depooling_output_file_name();
 
-    my $command = "java -jar $depooler_location -sch $scheme -vcf $vcf_file ";
-    $command .= $monitor ? "-m" : ("> " . $output_file);
+    my $command = "java -jar ${depooler_location} -sch ${scheme} -vcf ${vcf_file} -n ${threads_number}";
+    $command .= $monitor ? " -m" : (" > " . $output_file);
+    $command .= " -timeLimit ${time_limit}"             if $time_limit;
+    $command .= " -combLimit ${comb_limit}"             if $comb_limit;
+    $command .= " -tries ${tries}"                      if $tries;
+    $command .= " -success ${success}"                  if $success;
+    $command .= " -noIndels"                            if $noIndels;
+    $command .= " -seqerr ${seqerr}"                    if $seqerr;
+    $command .= " -confidence ${confidence}"            if $confidence;
+    $command .= " -mixingPrecision ${mixing_precision}" if $mixing_precision;
 
     my $exit_code = system $command;
     die if $exit_code;
@@ -228,6 +246,14 @@ sub parse_options {
         "$OPT{REGIONS}=s"           => \$regions,
         "$OPT{ORGANISM_PLOIDY}=i"   => \$organism_ploidy,
         "$OPT{GRAFIC_MONITOR}"      => \$monitor,
+        "$OPT{TIME_LIMIT}=i"        => \$time_limit,
+        "$OPT{COMBIN_LIMIT}=i"      => \$comb_limit,
+        "$OPT{TRIES}=i"             => \$tries,
+        "$OPT{SUCCESS}=i"           => \$success,
+        "$OPT{NO_INDELS}"           => \$noIndels,
+        "$OPT{SEQERR}=i"            => \$seqerr,
+        "$OPT{CONFIDENCE}=i"        => \$confidence,
+        "$OPT{MIX_PREC}=i"          => \$mixing_precision,
     );
     die "Unknown option"  if (not $opt_parsing);
     @trim5_seq = split(/,/,join(',',@trim5_seq));
@@ -267,11 +293,19 @@ sub write_depooling_options {
     open(OPTF, ">>", $opt_file) or die "Cannot write options file .";
     printf OPTF "-%s\t%s\n",    $OPT{VCF_FILE},         $vcf_file;
     printf OPTF "-%s\t%s\n",    $OPT{SCHEME},           $scheme;
-    printf OPTF "-%s\n",        $OPT{GRAFIC_MONITOR},   $monitor    if $monitor;
-    printf OPTF "-%s\t%s\n",    $OPT{PREFIX},           $prefix     if $prefix;
+    printf OPTF "-%s\t%s\n",    $OPT{TIME_LIMIT},       $time_limit        if $time_limit;
+    printf OPTF "-%s\t%s\n",    $OPT{COMBIN_LIMIT},     $comb_limit        if $comb_limit;
+    printf OPTF "-%s\t%s\n",    $OPT{TRIES},            $tries             if $tries;
+    printf OPTF "-%s\t%s\n",    $OPT{SUCCESS},          $success           if $success;
+    printf OPTF "-%s\n",        $OPT{NO_INDELS},                           if $noIndels;
+    printf OPTF "-%s\t%s\n",    $OPT{SEQERR},           $seqerr            if $seqerr;
+    printf OPTF "-%s\t%s\n",    $OPT{CONFIDENCE},       $confidence        if $confidence;
+    printf OPTF "-%s\t%s\n",    $OPT{MIX_PREC},         $mixing_precision  if $mixing_precision;
+    printf OPTF "-%s\n",        $OPT{GRAFIC_MONITOR},   $monitor           if $monitor;
+
+    printf OPTF "-%s\t%s\n",    $OPT{PREFIX},           $prefix             if $prefix;
     close OPTF;
 }
-
 #---FUNCTIONS---
 sub print_help {
     say "i'll help you";
