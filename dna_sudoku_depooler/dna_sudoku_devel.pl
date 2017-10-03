@@ -7,6 +7,7 @@ use File::Basename;
 use File::Spec;
 use File::Spec::Functions;
 use File::Path qw(make_path);
+use List::Util qw(max);
 
 #---OPTIONS---
 our $path_sep = File::Spec->catfile('', '');
@@ -35,7 +36,7 @@ our %OPT = (
     SCHEME          => 'scheme',
     DEMULT_FOLDER   => 'dmpf',
     FQ_FILE         => 'fq',
-    BAM_FILE     => 'bam',
+    BAM_FILE        => 'bam',
     VCF_FILE        => 'vcf',
     PREFIX          => 'prefix',
     OUTPUT          => 'output',
@@ -148,7 +149,7 @@ sub do_alignments_merging {
     foreach my $poolId (keys %pools_hash) {
         my $pool_bam_file = &define_pool_bam_file_name($poolId);
         die "No bam-file for the pool ${poolId}. Expected ${pool_bam_file}." if not -e $pool_bam_file;
-        $merging_command .= " ${pool_bam_file}.bam";
+        $merging_command .= " ${pool_bam_file}";
     }
     
     my $exit_code = system $merging_command;
@@ -170,15 +171,14 @@ sub do_snpcalling {
     say "***SNP-calling***";
     
     $vcf_file = &define_vcf_file_name();
-    use List::Util qw(max);
     my $max_ploidy = (max values %pools_hash) * $organism_ploidy;
-    my $snp_calling_report = &define_snp-calling-report_file_name($poolId);
+    my $snp_calling_report = &define_snp_calling_report_file_name();
 
-    my $command = "java -jar ${gatk_location} -T HaplotypeCaller -gt_mode DISCOVERY "
+    my $snp_calling_command = "java -jar ${gatk_location} -T HaplotypeCaller -gt_mode DISCOVERY "
         . "-R ${reference} -L ${regions} -I ${bam_file} --sample_ploidy ${max_ploidy} "
         . "-o ${vcf_file} -nct ${threads_number} 2> ${snp_calling_report}";
 
-    my $exit_code = system $command;
+    my $exit_code = system $snp_calling_command;
     die if $exit_code;
 
     &do_depooling() if not $exit_code;
@@ -196,7 +196,7 @@ sub do_depooling {
     $command .= $monitor ? "-m" : ("> " . $output_file);
 
     my $exit_code = system $command;
-    die if $exit_code
+    die if $exit_code;
 
     say "Finished successfully" ;
 }
@@ -378,7 +378,7 @@ sub create_snp_calling_folder {
 sub define_vcf_file_name {
     catfile($snp_folder, $prefix . 'snp.vcf');
 }
-sub define_snp-calling-report_file_name {
+sub define_snp_calling_report_file_name {
     catfile($snp_folder, $prefix . 'snp-calling_report.txt');
 }
 sub define_depooling_output_file_name {
