@@ -1,3 +1,0 @@
-# Example
-
-See example set in folder ....
