@@ -203,7 +203,7 @@ sub do_depooling {
     my $output_file = define_depooling_output_file_name();
 
     my $command = "java -jar ${depooler_location} -sch ${scheme} -vcf ${vcf_file} -n ${threads_number}";
-    $command .= $monitor ? " -m" : (" > " . $output_file);
+    $command .= $monitor ? " -g" : (" > " . $output_file);
     $command .= " -timeLimit ${time_limit}"             if $time_limit;
     $command .= " -combLimit ${comb_limit}"             if $comb_limit;
     $command .= " -tries ${tries}"                      if $tries;
@@ -374,7 +374,7 @@ sub create_folder {
 }
 
 sub define_output_options_file_name {
-    $opt_file = catfile($output_folder, $prefix . "options.txt");
+    $opt_file = catfile($output_folder, $prefix . "cfg.txt");
 }
 sub create_demultiplexing_folder {
     $dmp_folder = &create_folder("dmp-reads");
