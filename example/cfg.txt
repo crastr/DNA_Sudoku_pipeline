@@ -16,3 +16,4 @@ org_ploidy	2
 time_limit      20000
 tries           100
 noIndels
+gm

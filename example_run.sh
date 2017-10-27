@@ -1,3 +1,3 @@
 #!/bin/sh
 
-perl dePoP/dePoPLaunch.pl -cfg example/config_file.txt
+perl dePoP/dePoPLaunch.pl -cfg example/cfg.txt
